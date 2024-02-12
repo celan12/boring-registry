@@ -17,7 +17,6 @@ import (
 	credentials "cloud.google.com/go/iam/credentials/apiv1"
 	"cloud.google.com/go/iam/credentials/apiv1/credentialspb"
 	"cloud.google.com/go/storage"
-	"github.com/go-kit/log"
 	"golang.org/x/oauth2/google"
 	"google.golang.org/api/iterator"
 )
@@ -113,80 +112,6 @@ func (s *GCSStorage) UploadModule(ctx context.Context, namespace, name, provider
 	}
 
 	return s.GetModule(ctx, namespace, name, provider, version)
-}
-
-func (s *GCSStorage) MigrateModules(ctx context.Context, logger log.Logger, dryRun bool) error {
-	q := &storage.Query{
-		Prefix: modulePathPrefix(s.bucketPrefix, "", "", ""),
-	}
-	it := s.sc.Bucket(s.bucket).Objects(ctx, q)
-	for {
-		attrs, err := it.Next()
-		if errors.Is(err, iterator.Done) {
-			break
-		} else if err != nil {
-			return err
-		}
-
-		// Skip already migrated modules
-		if !isUnmigratedModule(s.bucketPrefix, attrs.Name) {
-			continue
-		}
-
-		targetKey := migrationTargetPath(s.bucketPrefix, s.moduleArchiveFormat, attrs.Name)
-		if dryRun {
-			_ = logger.Log("message", "skipping due to dry-run", "source", attrs.Name, "target", targetKey)
-		} else {
-			src := s.sc.Bucket(s.bucket).Object(attrs.Name)
-			dst := s.sc.Bucket(s.bucket).Object(targetKey).If(storage.Conditions{DoesNotExist: true})
-
-			if _, err = dst.CopierFrom(src).Run(ctx); err != nil {
-				return fmt.Errorf("migration failed: %w", err)
-			}
-
-			_ = logger.Log("message", "copied module", "source", attrs.Name, "target", targetKey)
-		}
-	}
-
-	return nil
-}
-
-// MigrateProviders is a temporary method needed for the migration from 0.7.0 to 0.8.0 and above
-func (s *GCSStorage) MigrateProviders(ctx context.Context, logger log.Logger, dryRun bool) error {
-	q := &storage.Query{
-		Prefix: modulePathPrefix(s.bucketPrefix, "", "", ""),
-	}
-	it := s.sc.Bucket(s.bucket).Objects(ctx, q)
-	for {
-		attrs, err := it.Next()
-		if errors.Is(err, iterator.Done) {
-			break
-		} else if err != nil {
-			return err
-		}
-
-		directory, err := providerMigrationTargetPath(s.bucketPrefix, attrs.Name)
-		if err != nil {
-			return err
-		}
-
-		targetKey := path.Join(directory, path.Base(attrs.Name))
-
-		if dryRun {
-			_ = logger.Log("message", "skipping due to dry-run", "source", attrs.Name, "target", targetKey)
-		} else {
-			src := s.sc.Bucket(s.bucket).Object(attrs.Name)
-			dst := s.sc.Bucket(s.bucket).Object(targetKey).If(storage.Conditions{DoesNotExist: true})
-
-			if _, err = dst.CopierFrom(src).Run(ctx); err != nil {
-				return fmt.Errorf("migration failed: %w", err)
-			}
-
-			_ = logger.Log("message", "copied module", "source", attrs.Name, "target", targetKey)
-		}
-	}
-
-	return nil
 }
 
 // GetProvider implements provider.Storage
